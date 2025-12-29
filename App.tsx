@@ -4,6 +4,46 @@ import Layout from './components/Layout';
 import { AppState, StudentInput, WellnessResponse, GUIDES, EnergyLevel, TaskPreference, Note, Moment } from './types';
 import { getWellnessGuidance } from './services/geminiService';
 
+// Moved StepCard outside App to prevent it being recreated on every re-render,
+// which causes loss of focus and input state.
+const StepCard: React.FC<{ 
+  title: string; 
+  subtitle?: string; 
+  children: React.ReactNode; 
+  onNext?: () => void; 
+  nextLabel?: string; 
+  canSkip?: boolean; 
+  onSkip?: () => void 
+}> = ({ title, subtitle, children, onNext, nextLabel = "Continue", canSkip, onSkip }) => (
+  <div className="fade-in space-y-6 w-full max-w-xl mx-auto">
+    <div className="space-y-1 text-center">
+      <h2 className="text-3xl font-bold font-display text-indigo-950 dark:text-indigo-50">{title}</h2>
+      {subtitle && <p className="text-indigo-600/80 dark:text-indigo-400 font-medium italic text-sm">{subtitle}</p>}
+    </div>
+    <div className="glass p-8 rounded-[2rem] shadow-xl space-y-6 card-lift">
+      {children}
+      <div className="flex flex-col gap-3 pt-4">
+        {onNext && (
+          <button
+            onClick={onNext}
+            className="w-full py-4 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:opacity-90 transition-all transform active:scale-[0.98]"
+          >
+            {nextLabel}
+          </button>
+        )}
+        {canSkip && onSkip && (
+          <button
+            onClick={onSkip}
+            className="w-full py-2 text-slate-400 dark:text-slate-500 hover:text-indigo-500 transition-colors text-xs font-bold uppercase tracking-widest"
+          >
+            Skip this part
+          </button>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.WELCOME);
   const [formData, setFormData] = useState<StudentInput>({
@@ -16,6 +56,12 @@ const App: React.FC = () => {
   });
   const [response, setResponse] = useState<WellnessResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Local temporary states for text inputs to ensure stability and focus retention
+  const [otherMood, setOtherMood] = useState('');
+  const [tempDescription, setTempDescription] = useState('');
+  const [tempField, setTempField] = useState('');
+  const [tempTaskPref, setTempTaskPref] = useState('');
   
   // Persistence states
   const [notes, setNotes] = useState<Note[]>(() => {
@@ -38,11 +84,35 @@ const App: React.FC = () => {
 
   const activeGuide = GUIDES.find(g => g.type === formData.guide);
 
+  // Helper function to reset all session-specific check-in data
+  const resetCheckIn = () => {
+    setFormData({
+      guide: 'Capybara',
+      mentalState: '',
+      description: '',
+      fieldOfStudy: '',
+      energyLevel: 'medium',
+      taskPreference: 'skip',
+    });
+    setOtherMood('');
+    setTempDescription('');
+    setTempField('');
+    setTempTaskPref('');
+    setResponse(null);
+    setError(null);
+  };
+
   const handleFinalSubmit = async () => {
+    // Commit the final task preference if it was typed
+    const finalTaskPref = tempTaskPref.trim() || formData.taskPreference;
+    
     setAppState(AppState.LOADING);
     setError(null);
     try {
-      const result = await getWellnessGuidance(formData);
+      const result = await getWellnessGuidance({
+        ...formData,
+        taskPreference: finalTaskPref
+      });
       setResponse(result);
       setAppState(AppState.RESULT);
     } catch (err) {
@@ -80,38 +150,16 @@ const App: React.FC = () => {
     setCurrentNote('');
   };
 
-  const StepCard: React.FC<{ title: string; subtitle?: string; children: React.ReactNode; onNext?: () => void; nextLabel?: string; canSkip?: boolean; onSkip?: () => void }> = ({ title, subtitle, children, onNext, nextLabel = "Continue", canSkip, onSkip }) => (
-    <div className="fade-in space-y-6 w-full max-w-xl mx-auto">
-      <div className="space-y-1 text-center">
-        <h2 className="text-3xl font-bold font-display text-indigo-950 dark:text-indigo-50">{title}</h2>
-        {subtitle && <p className="text-indigo-600/80 dark:text-indigo-400 font-medium italic text-sm">{subtitle}</p>}
-      </div>
-      <div className="glass p-8 rounded-[2rem] shadow-xl space-y-6 card-lift">
-        {children}
-        <div className="flex flex-col gap-3 pt-4">
-          {onNext && (
-            <button
-              onClick={onNext}
-              className="w-full py-4 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:opacity-90 transition-all transform active:scale-[0.98]"
-            >
-              {nextLabel}
-            </button>
-          )}
-          {canSkip && onSkip && (
-            <button
-              onClick={onSkip}
-              className="w-full py-2 text-slate-400 dark:text-slate-500 hover:text-indigo-500 transition-colors text-xs font-bold uppercase tracking-widest"
-            >
-              Skip this part
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  const handleNavigate = (s: string) => {
+    const nextState = s as AppState;
+    if (nextState === AppState.WELCOME) {
+      resetCheckIn();
+    }
+    setAppState(nextState);
+  };
 
   return (
-    <Layout activeState={appState} onNavigate={(s) => setAppState(s as AppState)}>
+    <Layout activeState={appState} onNavigate={handleNavigate}>
       {appState === AppState.WELCOME && (
         <div className="fade-in text-center space-y-12 py-12 flex flex-col items-center">
           <div className="space-y-4">
@@ -123,7 +171,10 @@ const App: React.FC = () => {
             </p>
           </div>
           <button
-            onClick={() => setAppState(AppState.CHOOSE_GUIDE)}
+            onClick={() => {
+              resetCheckIn();
+              setAppState(AppState.CHOOSE_GUIDE);
+            }}
             className="group relative px-16 py-6 bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 rounded-full font-bold shadow-2xl transition-all hover:shadow-indigo-300/30 overflow-hidden"
           >
             <span className="relative z-10 flex items-center gap-2 text-xl">Let's Begin <span className="group-hover:translate-x-1 transition-transform">→</span></span>
@@ -159,7 +210,6 @@ const App: React.FC = () => {
         </StepCard>
       )}
 
-      {/* Step Feeling, Description, Field, Energy, Preference remain logically similar but with refined card styles */}
       {appState === AppState.STEP_FEELING && (
         <StepCard title="How's your mood?">
           <div className="flex justify-center mb-4">
@@ -176,21 +226,38 @@ const App: React.FC = () => {
                   setFormData({ ...formData, mentalState: f });
                   setAppState(AppState.STEP_DESCRIPTION);
                 }}
-                className="py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent hover:border-indigo-300 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold transition-all shadow-sm"
+                className={`py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border transition-all shadow-sm font-semibold ${
+                   formData.mentalState === f ? 'border-indigo-400 bg-indigo-50/80 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200' : 'border-transparent hover:border-indigo-300 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+                }`}
               >
                 {f}
               </button>
             ))}
-            <input 
-              placeholder="Other..."
-              className="px-4 py-3 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent focus:border-indigo-300 outline-none text-center font-medium placeholder:text-slate-400"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                   setFormData({ ...formData, mentalState: (e.target as HTMLInputElement).value });
-                   setAppState(AppState.STEP_DESCRIPTION);
-                }
-              }}
-            />
+            <div className="col-span-1">
+              <input 
+                placeholder="Other..."
+                className="w-full px-4 py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent focus:border-indigo-300 outline-none text-center font-medium placeholder:text-slate-400 shadow-sm"
+                value={otherMood}
+                onChange={(e) => setOtherMood(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && otherMood.trim()) {
+                     setFormData({ ...formData, mentalState: otherMood });
+                     setAppState(AppState.STEP_DESCRIPTION);
+                  }
+                }}
+              />
+              {otherMood.trim() && (
+                <button 
+                  onClick={() => {
+                    setFormData({ ...formData, mentalState: otherMood });
+                    setAppState(AppState.STEP_DESCRIPTION);
+                  }}
+                  className="w-full mt-2 text-[10px] text-indigo-500 font-bold uppercase tracking-widest"
+                >
+                  Use this mood →
+                </button>
+              )}
+            </div>
           </div>
         </StepCard>
       )}
@@ -202,18 +269,29 @@ const App: React.FC = () => {
             rows={5}
             placeholder="Type here..."
             className="w-full px-6 py-5 bg-white/40 dark:bg-slate-800/40 border border-transparent focus:border-indigo-300 rounded-[2rem] transition-all outline-none resize-none text-slate-700 dark:text-slate-200"
-            value={formData.description}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            value={tempDescription}
+            onChange={(e) => setTempDescription(e.target.value)}
           />
           <div className="flex gap-4">
             <button
-              onClick={() => setAppState(AppState.STEP_FIELD)}
+              onClick={() => {
+                setFormData({ ...formData, description: tempDescription });
+                setAppState(AppState.STEP_FIELD);
+              }}
               className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200/50 dark:shadow-none"
             >
               Continue
             </button>
           </div>
-          <button onClick={() => setAppState(AppState.STEP_FIELD)} className="text-xs text-slate-400 font-bold uppercase tracking-widest text-center block w-full">I'd rather not say</button>
+          <button 
+            onClick={() => {
+              setFormData({ ...formData, description: '' });
+              setAppState(AppState.STEP_FIELD);
+            }} 
+            className="text-xs text-slate-400 font-bold uppercase tracking-widest text-center block w-full"
+          >
+            I'd rather not say
+          </button>
         </StepCard>
       )}
 
@@ -227,21 +305,39 @@ const App: React.FC = () => {
                   setFormData({ ...formData, fieldOfStudy: field });
                   setAppState(AppState.STEP_ENERGY);
                 }}
-                className="py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent hover:border-pink-300 text-slate-700 dark:text-slate-200 font-semibold transition-all shadow-sm"
+                className={`py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border transition-all shadow-sm font-semibold ${
+                  formData.fieldOfStudy === field ? 'border-pink-300 bg-pink-50/80 dark:bg-pink-900/30 text-pink-700 dark:text-pink-200' : 'border-transparent hover:border-pink-300 text-slate-700 dark:text-slate-200'
+                }`}
               >
                 {field}
               </button>
             ))}
           </div>
-          <input
-            placeholder="Or type your specific field..."
-            className="w-full px-6 py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent focus:border-pink-300 outline-none transition-all text-center"
-            value={formData.fieldOfStudy}
-            onChange={(e) => setFormData({ ...formData, fieldOfStudy: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setAppState(AppState.STEP_ENERGY);
-            }}
-          />
+          <div className="space-y-2">
+            <input
+              placeholder="Or type your specific field..."
+              className="w-full px-6 py-4 bg-white/50 dark:bg-slate-800/50 rounded-2xl border border-transparent focus:border-pink-300 outline-none transition-all text-center"
+              value={tempField}
+              onChange={(e) => setTempField(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && tempField.trim()) {
+                  setFormData({ ...formData, fieldOfStudy: tempField });
+                  setAppState(AppState.STEP_ENERGY);
+                }
+              }}
+            />
+            {tempField.trim() && (
+               <button 
+                onClick={() => {
+                  setFormData({ ...formData, fieldOfStudy: tempField });
+                  setAppState(AppState.STEP_ENERGY);
+                }}
+                className="w-full text-[10px] text-pink-500 font-bold uppercase tracking-widest"
+              >
+                Use this field →
+              </button>
+            )}
+          </div>
         </StepCard>
       )}
 
@@ -277,9 +373,12 @@ const App: React.FC = () => {
             {(['creative/art', 'movement', 'reflection', 'focus'] as TaskPreference[]).map(p => (
               <button
                 key={p}
-                onClick={() => setFormData({ ...formData, taskPreference: p })}
+                onClick={() => {
+                  setFormData({ ...formData, taskPreference: p });
+                  setTempTaskPref(''); // Clear custom typed if choosing predefined
+                }}
                 className={`py-4 rounded-2xl font-bold border-2 transition-all capitalize shadow-sm ${
-                  formData.taskPreference === p ? 'bg-indigo-50/80 dark:bg-indigo-900/40 border-indigo-400 text-indigo-700 dark:text-indigo-200' : 'bg-white/40 dark:bg-slate-800/40 border-transparent text-slate-500'
+                  formData.taskPreference === p && !tempTaskPref ? 'bg-indigo-50/80 dark:bg-indigo-900/40 border-indigo-400 text-indigo-700 dark:text-indigo-200' : 'bg-white/40 dark:bg-slate-800/40 border-transparent text-slate-500'
                 }`}
               >
                 {p.replace('/', ' & ')}
@@ -289,7 +388,8 @@ const App: React.FC = () => {
           <input
             placeholder="Something else?"
             className="w-full px-4 py-3 bg-white/40 dark:bg-slate-800/40 rounded-2xl border border-transparent focus:border-indigo-400 outline-none text-center"
-            onChange={(e) => setFormData({ ...formData, taskPreference: e.target.value })}
+            value={tempTaskPref}
+            onChange={(e) => setTempTaskPref(e.target.value)}
           />
         </StepCard>
       )}
@@ -396,7 +496,10 @@ const App: React.FC = () => {
           </div>
           <div className="flex flex-col gap-4 w-full">
             <button
-              onClick={() => setAppState(AppState.WELCOME)}
+              onClick={() => {
+                resetCheckIn();
+                setAppState(AppState.WELCOME);
+              }}
               className="px-12 py-5 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-full font-bold shadow-2xl hover:scale-105 transition-all text-lg"
             >
               Back to Start
